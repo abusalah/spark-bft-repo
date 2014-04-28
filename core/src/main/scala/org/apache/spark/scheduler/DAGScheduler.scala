@@ -17,6 +17,8 @@
 
 package org.apache.spark.scheduler
 
+import java.io._
+
 import java.io.NotSerializableException
 import java.util.Properties
 import java.util.concurrent.atomic.AtomicInteger
@@ -24,6 +26,11 @@ import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, Map}
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
+
+import scala.Unit
+import scala.runtime.BoxedUnit
+
+import org.apache.spark.api.java._
 
 import akka.actor._
 
@@ -33,6 +40,8 @@ import org.apache.spark.partial.{ApproximateActionListener, ApproximateEvaluator
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.{BlockId, BlockManager, BlockManagerMaster, RDDBlockId}
 import org.apache.spark.util.Utils
+
+import org.apache.hadoop.yarn.client.api.Byzantine
 
 /**
  * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
@@ -104,6 +113,10 @@ class DAGScheduler(
 
   // Contains the locations that each RDD's partitions are cached on
   private val cacheLocs = new HashMap[Int, Array[Seq[TaskLocation]]]
+
+  private var resultTable = new HashMap[Int, ArrayBuffer[Any]]
+  private val byzantine = new Byzantine
+  private[scheduler] val verifier = new Verifier
 
   // For tracking failed nodes, we use the MapOutputTracker's epoch number, which is sent with
   // every task. When we detect a node failing, we note the current epoch number and failed
@@ -739,7 +752,14 @@ class DAGScheduler(
         val missing = getMissingParentStages(stage).sortBy(_.id)
         logDebug("missing: " + missing)
         if (missing == Nil) {
-	  for (i <- 1 to 4) {
+	  if (byzantine.inByzantineMode() && stage.id == 0) {
+	    for (i <- 1 to 4) {
+	      // submit 4 jobs for byzantine mode
+              logInfo("BYZANTINE: Submitting " + stage + " (" + stage.rdd + "), which has no missing parents")
+              submitMissingTasks(stage, jobId.get)
+	    }
+	  }
+	  else {
             logInfo("Submitting " + stage + " (" + stage.rdd + "), which has no missing parents")
             submitMissingTasks(stage, jobId.get)
 	  }
@@ -775,6 +795,7 @@ class DAGScheduler(
       for (id <- 0 until job.numPartitions if !job.finished(id)) {
         val partition = job.partitions(id)
         val locs = getPreferredLocs(stage.rdd, partition)
+	logInfo("Adding task. stage.id: "+stage.id+" stage.rdd: "+stage.rdd+" job.func: "+job.func+" partition: "+partition+" locs: "+locs+" id: "+id)
         tasks += new ResultTask(stage.id, stage.rdd, job.func, partition, locs, id)
       }
     }
@@ -829,7 +850,7 @@ class DAGScheduler(
       return
     }
     val stage = stageIdToStage(task.stageId)
-
+    logInfo("task completed: "+task)
     def markStageAsFinished(stage: Stage) = {
       val serviceTime = stageToInfos(stage).submissionTime match {
         case Some(t) => "%.03f".format((System.currentTimeMillis() - t) / 1000.0)
@@ -849,6 +870,22 @@ class DAGScheduler(
         pendingTasks(stage) -= task
         task match {
           case rt: ResultTask[_, _] =>
+	    if (byzantine.inByzantineMode()) {
+	      // check the result table for this partition
+	      if (resultTable.getOrElseUpdate(task.partitionId, new ArrayBuffer[Any]).length < 4) {
+		resultTable(task.partitionId) += event.result
+
+		// if we haven't entered all 4 duplicates return
+		if (resultTable(task.partitionId).length < 4) {
+		  return
+		}
+
+		// all 4 completed
+		else {
+		  verifier.verify(resultTable(task.partitionId))
+		}
+	      }
+	    }
             resultStageToJob.get(stage) match {
               case Some(job) =>
                 if (!job.finished(rt.outputId)) {
@@ -858,7 +895,15 @@ class DAGScheduler(
                   if (job.numFinished == job.numPartitions) {
                     markStageAsFinished(stage)
                     cleanupStateForJobAndIndependentStages(job, Some(stage))
-                    listenerBus.post(SparkListenerJobEnd(job.jobId, JobSucceeded))
+		    // check to see if the job has been verified. if not in byzantine 
+		    // mode will always return true
+		    if (verifier.verified) {
+                      listenerBus.post(SparkListenerJobEnd(job.jobId, JobSucceeded))
+		    }
+		    else {
+		      failJobAndIndependentStages(job, 
+						  "Job "+job.jobId+" cancelled due to BFT failure", None)
+		    }
                   }
                   job.listener.taskSucceeded(rt.outputId, event.result)
                 }
@@ -915,8 +960,17 @@ class DAGScheduler(
                   stage <- newlyRunnable.sortBy(_.id)
                   jobId <- activeJobForStage(stage)
                 } {
-                  logInfo("Submitting " + stage + " (" + stage.rdd + "), which is now runnable")
-                  submitMissingTasks(stage, jobId)
+		  if (byzantine.inByzantineMode() && stage.id == 0) {
+		    // submit 4 jobs for byzantine mode
+		    for (i <- 1 to 4) {
+                      logInfo("Submitting " + stage + " (" + stage.rdd + "), which is now runnable")
+		      submitMissingTasks(stage, jobId)
+		    }
+		  }
+		  else {
+                    logInfo("Submitting " + stage + " (" + stage.rdd + "), which is now runnable")
+                    submitMissingTasks(stage, jobId)
+		  }
                 }
               }
             }
