@@ -43,6 +43,7 @@ import org.apache.spark.util.Utils
 
 import org.apache.hadoop.yarn.client.api.Byzantine
 
+
 /**
  * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
  * stages for each job, keeps track of which RDDs and stage outputs are materialized, and finds a
@@ -752,15 +753,15 @@ class DAGScheduler(
         val missing = getMissingParentStages(stage).sortBy(_.id)
         logDebug("missing: " + missing)
         if (missing == Nil) {
-	  if (byzantine.inByzantineMode() && stage.id == 0) {
-	    for (i <- 1 to 4) {
-	      // submit 4 jobs for byzantine mode
-              logInfo("BYZANTINE: Submitting " + stage + " (" + stage.rdd + "), which has no missing parents")
+	  if (byzantine.inByzantineMode) {
+	    for (i <- 1 to byzantine.getNumReplicas) {
+	      // submit NUM_REPLICAS jobs for byzantine mode
+              logInfo("BYZANTINE: Submitting stage: " + stage + " (" + stage.rdd + "), jobId: "+jobId.get+" which has no missing parents")
               submitMissingTasks(stage, jobId.get)
 	    }
 	  }
 	  else {
-            logInfo("Submitting " + stage + " (" + stage.rdd + "), which has no missing parents")
+            logInfo("Submitting stage: " + stage + " (" + stage.rdd + "), jobId: "+jobId.get+" which has no missing parents")
             submitMissingTasks(stage, jobId.get)
 	  }
           runningStages += stage
@@ -856,7 +857,7 @@ class DAGScheduler(
         case Some(t) => "%.03f".format((System.currentTimeMillis() - t) / 1000.0)
         case _ => "Unknown"
       }
-      logInfo("%s (%s) finished in %s s".format(stage, stage.name, serviceTime))
+      logInfo("stage: %s (%s) finished in %s s".format(stage, stage.name, serviceTime))
       stageToInfos(stage).completionTime = Some(System.currentTimeMillis())
       listenerBus.post(SparkListenerStageCompleted(stageToInfos(stage)))
       runningStages -= stage
@@ -870,17 +871,19 @@ class DAGScheduler(
         pendingTasks(stage) -= task
         task match {
           case rt: ResultTask[_, _] =>
-	    if (byzantine.inByzantineMode()) {
+	    if (byzantine.inByzantineMode) {
 	      // check the result table for this partition
-	      if (resultTable.getOrElseUpdate(task.partitionId, new ArrayBuffer[Any]).length < 4) {
+	      if (resultTable.getOrElseUpdate(task.partitionId, new ArrayBuffer[Any]).length < byzantine.getNumReplicas) {
 		resultTable(task.partitionId) += event.result
 
-		// if we haven't entered all 4 duplicates return
-		if (resultTable(task.partitionId).length < 4) {
+		logInfo("ATTEMPTID: "+" RESULT: "+event.result)
+		
+		// if we haven't entered all NUM_REPLICAS duplicates return
+		if (resultTable(task.partitionId).length < byzantine.getNumReplicas) {
 		  return
 		}
 
-		// all 4 completed
+		// all NUM_REPLICAS completed
 		else {
 		  verifier.verify(resultTable(task.partitionId))
 		}
@@ -960,15 +963,15 @@ class DAGScheduler(
                   stage <- newlyRunnable.sortBy(_.id)
                   jobId <- activeJobForStage(stage)
                 } {
-		  if (byzantine.inByzantineMode() && stage.id == 0) {
-		    // submit 4 jobs for byzantine mode
-		    for (i <- 1 to 4) {
-                      logInfo("Submitting " + stage + " (" + stage.rdd + "), which is now runnable")
+		  if (byzantine.inByzantineMode) {
+		    // submit NUM_REPLICAS jobs for byzantine mode
+		    for (i <- 1 to byzantine.getNumReplicas) {
+		      logInfo("Submitting stage: " + stage + " (" + stage.rdd + "), jobId: "+jobId+" which is now runnable")
 		      submitMissingTasks(stage, jobId)
 		    }
 		  }
 		  else {
-                    logInfo("Submitting " + stage + " (" + stage.rdd + "), which is now runnable")
+		    logInfo("Submitting stage: " + stage + " (" + stage.rdd + "), jobId: "+jobId+" which is now runnable")
                     submitMissingTasks(stage, jobId)
 		  }
                 }

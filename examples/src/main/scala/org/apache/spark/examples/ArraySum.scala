@@ -20,18 +20,19 @@ package org.apache.spark.examples
 import org.apache.spark._
 
 /**  */
-object HelloWorld {
+object ArraySum {
   def main(args: Array[String]) {
     if (args.length == 0) {
-      System.err.println("Usage: HelloWorld <master> [<slices>]")
+      System.err.println("Usage: ArraySum <master> [<slices>]")
       System.exit(1)
     }
-    val spark = new SparkContext(args(0), "HelloWorld",
+    val spark = new SparkContext(args(0), "ArraySum",
       System.getenv("SPARK_HOME"), SparkContext.jarOfClass(this.getClass))
     val slices = if (args.length > 1) args(1).toInt else 2
 
-    val n = 100 * slices
+    val n = 500000 * slices
     val count = spark.parallelize(1 to n, slices).map { i =>
+      println(i)
       i
     }.reduce(_ + _)
 

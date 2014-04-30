@@ -154,13 +154,25 @@ private[spark] class ShuffleMapTask(
     try {
       // Obtain all the block writers for shuffle blocks.
       val ser = Serializer.getSerializer(dep.serializer)
+      println("attemptId: "+context.attemptId+" partitionid: "+partitionId)
       shuffle = shuffleBlockManager.forMapTask(dep.shuffleId, partitionId, numOutputSplits, ser)
 
       // Write the map output to its associated buckets.
       for (elem <- rdd.iterator(split, context)) {
         val pair = elem.asInstanceOf[Product2[Any, Any]]
         val bucketId = dep.partitioner.getPartition(pair._1)
-        shuffle.writers(bucketId).write(pair)
+
+	/* WAS USING THIS TO INJECT FAULTS */
+	// if (context.attemptId == 3) {
+	//   val newpair = (pair._1, -1)
+	//   println("MESSING UP SHUFFLEMAP: "+newpair+" pair: "+pair)
+	//   shuffle.writers(bucketId).write(newpair)
+	// }
+	// else {
+        //   shuffle.writers(bucketId).write(pair)
+	// }
+	/* END FAULT INJECTION */
+        shuffle.writers(bucketId).write((pair._1, -1))
       }
 
       // Commit the writes. Get the size of each bucket block (total block size).

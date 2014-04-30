@@ -24,6 +24,8 @@ import org.apache.spark.rdd.RDD
 
 import scala.util.control._
 
+import org.apache.hadoop.yarn.client.api.Byzantine
+
 /**
  */
 private[spark]
@@ -31,58 +33,46 @@ class Verifier() extends Logging {
 
   var verified = true
   private var createErrors = 0
-
+  private val byzantine = new Byzantine
+  
   def verify(resultArray: ArrayBuffer[Any]) {
     val loop0 = new Breaks
     val loop1 = new Breaks
     var count = 0
     var votes:Array[Int] = new Array[Int](4)
-    logInfo("RESULTS STRING: "+resultArray(0).toString)
-    logInfo("RESULTS CLASS: "+resultArray(0).getClass)
+    // logInfo("RESULTS STRING: "+resultArray(3).toString)
+    // logInfo("RESULTS CLASS: "+resultArray(3).getClass)
 
-    resultArray(0) match {
-      case Some(int) =>
-	logInfo("Some(int)")
+    resultArray(3) match {
+      case Some(_) =>
+	// logInfo("Some(int)")
 
-	/* THIS IS JUST USED TO INJECT ERRORS */
-	createErrors = 0 // set this to inject errors
-	logInfo("Adding result "+createErrors)
-	for (j <- createErrors until 3) { // change the until for more errors
-	  var x = createErrors
-	  if (j == 1) {
-	    x = 3
+	// for (v <- resultArray) {
+	//   logInfo("V: "+v)
+	// }
+	for (v0 <- 0 until (resultArray.length/2)) {
+	  for (v1 <- v0 until resultArray.length) {
+	    // logInfo("v0: ["+v0+"] v1: ["+v1+"]")
+	    if (resultArray(v0) != resultArray(v1)) {
+	      votes(v0) += 1
+	      votes(v1) += 1
+	    }
 	  }
-	  if (j == 2) {
-	    x = 2
-	  }
-	  resultArray(x) = Some(x*(-1))
-	  createErrors += 1
 	}
-	/* END ERROR INJECTION */
 
-	for (v <- resultArray) {
-	  logInfo("V: "+v)
-	}
-	var i = 0
-	loop0.breakable {
-	  for (v0 <- resultArray) {
-	    for (v1 <- resultArray) {
-	      logInfo("v0: ["+v0+"] v1: ["+v1+"]")
-	      if (v0 != v1) {
-	    	votes(i) += 1
-	      }
+      case a: Int if a >= 0 =>
+	// logInfo("if a > 0")
+
+	// for (v <- resultArray) {
+	//   logInfo("V: "+v)
+	// }
+	for (v0 <- 0 until (resultArray.length/2)) {
+	  for (v1 <- v0 until resultArray.length) {
+	    // logInfo("v0: ["+v0+"] v1: ["+v1+"]")
+	    if (resultArray(v0) != resultArray(v1)) {
+	      votes(v0) += 1
+	      votes(v1) += 1
 	    }
-	    
-	    if (votes(i) == 0) {
-	      loop0.break
-	    }
-	    if (votes(i) < 2) {
-	      votes(i) = 0
-	    }
-	    else {
-	      votes(i) = 1
-	    }
-	    i += 1
 	  }
 	}
 
@@ -97,19 +87,6 @@ class Verifier() extends Logging {
 	    for (i <- 0 until resultArray.length) {
 	      tuples += resultArray(i).asInstanceOf[Array[Tuple2[_, _]]]
 	    }
-
-	    /* THIS IS JUST USED TO INJECT ERRORS */
-	    createErrors = 0 // set this to inject errors
-	    for (i <- createErrors until 2) { // change the until to 
-	      logInfo("Adding result "+createErrors)
-	      val modTuples = new Array[Tuple2[_, _]](tuples(createErrors).length)
-	      for (t <- 0 until tuples(createErrors).length) {
-		modTuples(t) = (tuples(createErrors)(t)._1, -1)
-	      }
-	      tuples(i) = modTuples
-	    }
-	    createErrors += 1
-	    /* END ERROR INJECTION */
 	    
 	    val length = tuples(0).length
 	    for (i <- 1 until tuples.length) {
@@ -149,15 +126,16 @@ class Verifier() extends Logging {
 	    logInfo("result(0)(0): _")
 	}
     }
-    for (v <- votes) {
-      logInfo("V: "+v)
+    var broke = false
+    loop0.breakable {
+      for (v <- 0 until (votes.length/2)) {
+	if (votes(v) < byzantine.getNumReplicas/2) {
+	  broke = true
+	  loop0.break
+	}
+      }
     }
-    var decision = 0
-    for (v <- 0 to votes.length-1) {
-      decision += votes(v)
-    }
-    logInfo("DECISION: "+decision)
-    if (decision >= 2) {
+    if (!broke) {
       logError("THESE CONTAINERS AREN'T OKAY!!!")
       verified = false
     }

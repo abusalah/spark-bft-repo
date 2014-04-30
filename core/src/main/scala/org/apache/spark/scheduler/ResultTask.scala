@@ -100,7 +100,7 @@ private[spark] class ResultTask[T, U](
   def this() = this(0, null, null, 0, null, 0)
 
   var split = if (rdd == null) null else rdd.partitions(partitionId)
-
+  
   @transient private val preferredLocs: Seq[TaskLocation] = {
     if (locs == null) Nil else locs.toSet.toSeq
   }
@@ -108,7 +108,17 @@ private[spark] class ResultTask[T, U](
   override def runTask(context: TaskContext): U = {
     metrics = Some(context.taskMetrics)
     try {
+      /* BEGIN FAULT INJECTION */
+      // if (context.attemptId == 0 || context.attemptId == 1
+      // 	  || context.attemptId == 2) {
+      // 	println("CHANGING FUNC")
+      // 	func = (c: TaskContext, i: Iterator[T]) => 
+			  // i.next.asInstanceOf[U]
+      // }
+      /* END FAULT INJECTION */
+      
       func(context, rdd.iterator(split, context))
+
     } finally {
       context.executeOnCompleteCallbacks()
     }

@@ -423,6 +423,7 @@ private[spark] class TaskSetManager(
             taskSet.id, index, serializedTask.limit, timeTaken))
           val taskName = "task %s:%d".format(taskSet.id, index)
 	  logInfo("Sending task: %s with info: %s to DAG scheduler".format(task, info))
+
           sched.dagScheduler.taskStarted(task, info)
           return Some(new TaskDescription(taskId, execId, taskName, index, serializedTask))
         }
