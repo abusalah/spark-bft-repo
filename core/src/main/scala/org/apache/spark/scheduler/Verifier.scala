@@ -140,7 +140,7 @@ class Verifier() extends Logging {
       verified = false
     }
     else {
-      logInfo("THESE CONTAINERS ARE GREAT!!!!!!!!!!!!!")
+      logInfo("THESE CONTAINERS ARE GREAT!!!!!!!!!!!!!--------------------")
     }
   }
 }
